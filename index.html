@@ -87,28 +87,32 @@
                 stampaLog(`Connesso a: ${device.name}`);
                 return device.gatt.connect();
             })
-            .then(server => return server.getPrimaryService(SERVIZIO_UUID))
+            .then(server => {
+                return server.getPrimaryService(SERVIZIO_UUID);
+            })
             .then(servizio => {
-                servizio.getCharacteristic(CARATTERISTICA_WRITE_UUID).then(cWrite => { caratteristicaScrittura = cWrite; });
-                return servizio.getCharacteristic(CARATTERISTICA_READ_UUID);
+                servizio.getCharacteristic(CARATTERISTICA_WRITE_UUID).then(cWrite => { 
+                    caratteristicaScrittura = cWrite; 
+                    stampaLog("Canale Scrittura Mappato.");
+                });
+                return servicio.getCharacteristic(CARATTERISTICA_READ_UUID);
             })
             .then(cRead => {
                 caratteristicaLettura = cRead;
                 return caratteristicaLettura.startNotifications();
             })
             .then(() => {
-                // GESTORE DELLE RISPOSTE AUTOMATICHE (Il cuore di CHIRP)
                 caratteristicaLettura.addEventListener('characteristicvaluechanged', (event) => {
                     let valore = new Uint8Array(event.target.value.buffer);
                     let stringaHex = Array.from(valore).map(b => b.toString(16).padStart(2, '0')).join(' ').toUpperCase();
                     stampaLog(`<span style="color: #00ffcc;"><- Radio: ${stringaHex}</span>`);
-                    
-                    // Macchina a stati per seguire CHIRP
                     gestisciRispostaRadio(valore);
                 });
                 stampaLog("<span style='color: #00ff00;'>PRONTO. Accendi la radio e premi il pulsante ROSSO.</span>");
             })
-            .catch(error => { stampaLog("<span style='color: red;'>ERRORE: " + error + "</span>"); });
+            .catch(error => { 
+                stampaLog("<span style='color: red;'>ERRORE: " + error + "</span>"); 
+            });
         }
 
         async function avviaFlussoChirp() {
@@ -120,9 +124,8 @@
         }
 
         async function gestisciRispostaRadio(dati) {
-            // STEP 1: La radio risponde al PROGRAM con ACK (0x06)
             if (stepProtocollo === 1 && dati[0] === 0x06) {
-                stampaLog("<- ACK Ricevuto. Attesa 100ms come da specifiche CHIRP...");
+                stampaLog("<- ACK Ricevuto. Attesa 100ms...");
                 stepProtocollo = 2;
                 
                 setTimeout(async () => {
@@ -132,16 +135,14 @@
                 return;
             }
 
-            // STEP 2: Dopo il secondo ACK la radio sputa il firmware (es. inizia con lettere o dati identificativi)
             if (stepProtocollo === 2) {
-                stampaLog("<- Identificativo firmware ricevuto. Invio terzo ACK di conferma...");
+                stampaLog("<- Firmware rilevato. Invio terzo ACK...");
                 stepProtocollo = 3;
                 
                 setTimeout(async () => {
                     await caratteristicaScrittura.writeValue(new Uint8Array([0x06]));
-                    stampaLog("-> [CHIRP Step 3] Terzo ACK inviato. Richiesta lettura blocco memoria 0x0000 (64 byte)...");
+                    stampaLog("-> [CHIRP Step 3] Terzo ACK inviato. Richiesta lettura memoria (64 byte)...");
                     
-                    // Invio comando finale di lettura standard CHIRP Next (R + 00 + 00 + 40)
                     setTimeout(async () => {
                         const payloadLettura = new Uint8Array([0x52, 0x00, 0x00, 0x40]);
                         await caratteristicaScrittura.writeValue(payloadLettura);
