@@ -3,126 +3,152 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Baofeng BT-1AD Custom Controller</title>
+    <title>Baofeng BT-1AD Controller</title>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 20px; background: #222; color: #fff; }
-        button { padding: 12px 20px; font-size: 15px; margin: 8px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        body { 
+            font-family: sans-serif; 
+            text-align: center; 
+            padding: 20px; 
+            background: #222; 
+            color: #fff; 
+        }
+        button { 
+            padding: 15px 25px; 
+            font-size: 16px; 
+            margin: 10px; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            font-weight: bold;
+            width: 85%;
+            max-width: 300px;
+        }
         .btn-connect { background-color: #28a745; color: white; }
         .btn-action { background-color: #007bff; color: white; }
         .btn-ack { background-color: #ffc107; color: black; }
-        #log { background: #000; color: #0f0; padding: 15px; text-align: left; height: 220px; overflow-y: scroll; border-radius: 5px; font-family: monospace; font-size: 13px; margin-top: 15px; }
-        .box { border: 1px solid #444; padding: 15px; margin: 15px auto; max-width: 400px; border-radius: 8px; background: #333; }
-        input { padding: 10px; font-size: 16px; width: 80%; text-align: center; border-radius: 5px; border: 1px solid #666; background: #fff; color: #000; }
+        #log { 
+            background: #000; 
+            color: #0f0; 
+            padding: 15px; 
+            text-align: left; 
+            height: 250px; 
+            overflow-y: scroll; 
+            border-radius: 5px; 
+            font-family: monospace; 
+            font-size: 13px;
+            margin: 20px auto;
+            max-width: 500px;
+            border: 1px solid #444;
+        }
     </style>
 </head>
 <body>
 
     <h2>Baofeng BT-1AD Web App</h2>
+    <p>Assicurati che il Bluetooth del telefono e la radio siano accesi.</p>
     
     <button class="btn-connect" onclick="connettiBluetooth()">1. Connetti Dongle</button>
     <br>
     <button class="btn-action" onclick="inviaStrettaMano()">2. Sveglia Radio (PROGRAM)</button>
+    <br>
     <button class="btn-ack" onclick="inviaACK()">3. Invia Secondo ACK (06)</button>
     
-    <div class="box">
-        <h3>Esempio Canale Memoria</h3>
-        <p>Inserisci Frequenza (Esempio: 145.500):</p>
-        <input type="text" id="frequenza" value="145.500" placeholder="000.000">
-        <br><br>
-        <button class="btn-action" onclick="calcolaEInviaBCD()" style="background-color: #dc3545;">Invia a Radio (Test)</button>
-    </div>
-
     <h3>Log Comunicazione:</h3>
-    <div id="log"></div>
+    <div id="log">In attesa di connessione...</div>
 
     <script>
         let dispositivoBle = null;
         let caratteristicaScrittura = null;
         let caratteristicaLettura = null;
 
-        // I TUOI UUID ESATTI DALLO SCREENSHOT
+        // UUID estratti dal tuo screenshot
         const SERVIZIO_UUID = '0000ff00-0000-1000-8000-00805f9b34fb';
         const CARATTERISTICA_READ_UUID = '0000ff01-0000-1000-8000-00805f9b34fb';
         const CARATTERISTICA_WRITE_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';
 
         function stampaLog(testo) {
             const logDiv = document.getElementById('log');
+            if (logDiv.innerHTML === "In attesa di connessione...") {
+                logDiv.innerHTML = "";
+            }
             logDiv.innerHTML += testo + '<br>';
             logDiv.scrollTop = logDiv.scrollHeight;
         }
 
-        async function connettiBluetooth() {
-            try {
-                stampaLog("Ricerca dei dispositivi 'BF_' in corso...");
-                dispositivoBle = await navigator.bluetooth.requestDevice({
-                    filters: [{ namePrefix: 'BF_' }],
-                    optionalServices: [SERVIZIO_UUID]
-                });
+        function connettiBluetooth() {
+            stampaLog("Tentativo di apertura pop-up di ricerca...");
 
-                stampaLog(`Connessione a ${dispositivoBle.name}...`);
-                const server = await dispositivoBle.gatt.connect();
+            // Esecuzione immediata al click per bypassare le restrizioni di Chrome
+            navigator.bluetooth.requestDevice({
+                filters: [{ namePrefix: 'BF_' }],
+                optionalServices: [SERVIZIO_UUID]
+            })
+            .then(device => {
+                dispositivoBle = device;
+                stampaLog(`Trovato: ${device.name}. Connessione...`);
+                return device.gatt.connect();
+            })
+            .then(server => {
+                stampaLog("Connesso al server GATT. Recupero servizio...");
+                return server.getPrimaryService(SERVIZIO_UUID);
+            })
+            .then(servizio => {
+                stampaLog("Servizio trovato. Configurazione canali...");
                 
-                stampaLog("Apertura Servizio FF00...");
-                const servizio = await server.getPrimaryService(SERVIZIO_UUID);
-                
-                stampaLog("Mappatura Canale Scrittura FF02...");
-                caratteristicaScrittura = await servizio.getCharacteristic(CARATTERISTICA_WRITE_UUID);
-                
-                stampaLog("Mappatura Canale Lettura FF01...");
-                caratteristicaLettura = await servizio.getCharacteristic(CARATTERISTICA_READ_UUID);
-                
-                // Attiviamo l'ascolto sul canale di notifica FF01
-                await caratteristicaLettura.startNotifications();
+                // Salva la caratteristica di scrittura (FF02)
+                servizio.getCharacteristic(CARATTERISTICA_WRITE_UUID)
+                    .then(cWrite => { 
+                        caratteristicaScrittura = cWrite; 
+                        stampaLog("Canale Scrittura (FF02) Mappato.");
+                    });
+
+                // Ritorna la caratteristica di lettura (FF01) per la catena successiva
+                return servizio.getCharacteristic(CARATTERISTICA_READ_UUID);
+            })
+            .then(cRead => {
+                caratteristicaLettura = cRead;
+                stampaLog("Canale Lettura (FF01) Mappato. Attivazione notifiche...");
+                return caratteristicaLettura.startNotifications();
+            })
+            .then(() => {
+                // Configura la ricezione dei dati della radio
                 caratteristicaLettura.addEventListener('characteristicvaluechanged', (event) => {
                     let valore = new Uint8Array(event.target.value.buffer);
                     let stringaHex = Array.from(valore).map(b => b.toString(16).padStart(2, '0')).join(' ').toUpperCase();
                     let stringaAscii = Array.from(valore).map(b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : '.').join('');
                     stampaLog(`<span style="color: #00ffcc;"><- Ricevuto HEX: ${stringaHex} | ASCII: ${stringaAscii}</span>`);
                 });
-
-                stampaLog("CONNESSO E PRONTO!");
-            } catch (error) {
-                stampaLog("<span style="color: red;">ERRORE: " + error + "</span>");
-            }
+                stampaLog("<span style='color: #00ff00; font-weight: bold;'>CONNESSO CON SUCCESSO! PROCEDI AL PUNTO 2.</span>");
+            })
+            .catch(error => {
+                stampaLog("<span style='color: red;'>ERRORE: " + error + "</span>");
+            });
         }
 
-        async function inviaStrettaMano() {
-            if (!caratteristicaScrittura) { return stampaLog("Errore: Prima connettiti!"); }
-            try {
-                // 06 50 52 4F 47 52 41 4D
-                const payload = new Uint8Array([0x06, 0x50, 0x52, 0x4F, 0x47, 0x52, 0x41, 0x4D]);
-                stampaLog("-> Invio: PROGRAM");
-                await caratteristicaScrittura.writeValue(payload);
-            } catch (error) {
-                stampaLog("Errore scrittura: " + error);
-            }
-        }
-
-        async function inviaACK() {
-            if (!caratteristicaScrittura) { return; }
-            try {
-                const payload = new Uint8Array([0x06]);
-                stampaLog("-> Invio secondo ACK: 06");
-                await caratteristicaScrittura.writeValue(payload);
-            } catch (error) {
-                stampaLog("Errore ACK: " + error);
-            }
-        }
-
-        // Questo serve a farti capire come funziona la conversione per la radio
-        async function calcolaEInviaBCD() {
-            let freqStr = document.getElementById('frequenza').value.replace('.', ''); // Toglie il punto (es: 145500)
-            if(freqStr.length < 6) { 
-                stampaLog("Frequenza non valida. Usa il formato 145.500");
+        function inviaStrettaMano() {
+            if (!caratteristicaScrittura) { 
+                stampaLog("<span style='color: red;'>Errore: Non sei connesso! Clicca prima sul punto 1.</span>"); 
                 return; 
             }
-            
-            // La radio Baofeng memorizza le frequenze invertite in BCD (2 cifre per byte)
-            // Es: 14 55 00 -> diventerà memorizzato al contrario in base alla mappa di CHIRP.
-            stampaLog(`Logica BCD per frequenza ${freqStr}: [Funzione di scrittura in sviluppo]`);
-            
-            // Qui dentro in futuro metteremo il comando di scrittura memoria (0x57) 
-            // che scriverà la frequenza nell'indirizzo del Canale 1
+            // Byte: \x06PROGRAM
+            const payload = new Uint8Array([0x06, 0x50, 0x52, 0x4F, 0x47, 0x52, 0x41, 0x4D]);
+            stampaLog("-> Invio: PROGRAM...");
+            caratteristicaScrittura.writeValue(payload)
+                .then(() => stampaLog("Comando inviato, attendi risposta dalla radio nel log..."))
+                .catch(err => stampaLog("<span style='color: red;'>Errore invio: " + err + "</span>"));
+        }
+
+        function inviaACK() {
+            if (!caratteristicaScrittura) {
+                stampaLog("<span style='color: red;'>Errore: Non sei connesso!</span>");
+                return;
+            }
+            // Un singolo byte 0x06
+            const payload = new Uint8Array([0x06]);
+            stampaLog("-> Invio secondo ACK: 06...");
+            caratteristicaScrittura.writeValue(payload)
+                .then(() => stampaLog("ACK inviato."))
+                .catch(err => stampaLog("<span style='color: red;'>Errore ACK: " + err + "</span>"));
         }
     </script>
 </body>
