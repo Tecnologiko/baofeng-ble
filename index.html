@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Baofeng BT-1AD Controller v4</title>
+    <title>Baofeng CHIRP Clone Controller</title>
     <style>
         body { 
             font-family: sans-serif; 
@@ -28,16 +28,14 @@
             width: 100%;
         }
         .btn-connect { background-color: #28a745; color: white; }
-        .btn-action { background-color: #007bff; color: white; }
-        .btn-ack { background-color: #ffc107; color: black; }
-        .btn-read { background-color: #9400d3; color: white; }
+        .btn-action { background-color: #dc3545; color: white; }
         
         #log { 
             background: #000; 
             color: #0f0; 
             padding: 15px; 
             text-align: left; 
-            height: 280px; 
+            height: 320px; 
             overflow-y: scroll; 
             border-radius: 5px; 
             font-family: monospace; 
@@ -50,17 +48,12 @@
 </head>
 <body>
 
-    <h2>Baofeng BT-1AD Web App</h2>
-    <p>Esegui 1, 2, 3 e poi testa i tre pulsanti viola uno alla volta.</p>
+    <h2>Baofeng BT-1AD (CHIRP Next Engine)</h2>
+    <p>Sincronizzazione automatica basata sul protocollo CHIRP.</p>
     
     <div class="btn-container">
         <button class="btn-connect" onclick="connettiBluetooth()">1. Connetti Dongle</button>
-        <button class="btn-action" onclick="inviaStrettaMano()">2. Sveglia Radio (PROGRAM)</button>
-        <button class="btn-ack" onclick="inviaACK()">3. Invia Secondo ACK (06)</button>
-        <hr style="border: 1px solid #444; margin: 15px 0;">
-        <button class="btn-read" onclick="leggiStandardNuovo()">4A. Leggi Blocco 64 byte (UV-5R Recenti)</button>
-        <button class="btn-read" onclick="leggiStandardVecchio()">4B. Leggi Blocco 32 byte (UV-5R Medie)</button>
-        <button class="btn-read" onclick="leggiStandardAlternativo()">4C. Leggi con Comando '0x05'</button>
+        <button class="btn-action" onclick="avviaFlussoChirp()">2. Avvia Sblocco e Lettura Completa</button>
     </div>
     
     <h3>Log Comunicazione:</h3>
@@ -68,9 +61,9 @@
 
     <script>
         let dispositivoBle = null;
-        let caratteristicheMappate = false;
         let caratteristicaScrittura = null;
         let caratteristicaLettura = null;
+        let stepProtocollo = 0; 
 
         const SERVIZIO_UUID = '0000ff00-0000-1000-8000-00805f9b34fb';
         const CARATTERISTICA_READ_UUID = '0000ff01-0000-1000-8000-00805f9b34fb';
@@ -84,84 +77,78 @@
         }
 
         function connettiBluetooth() {
-            stampaLog("Tentativo di apertura pop-up di ricerca...");
+            stampaLog("Apertura ricerca Bluetooth...");
             navigator.bluetooth.requestDevice({
                 filters: [{ namePrefix: 'BF_' }],
                 optionalServices: [SERVIZIO_UUID]
             })
             .then(device => {
                 dispositivoBle = device;
-                stampaLog(`Trovato: ${device.name}. Connessione...`);
+                stampaLog(`Connesso a: ${device.name}`);
                 return device.gatt.connect();
             })
-            .then(server => {
-                stampaLog("Connesso al server GATT. Recupero servizio...");
-                return server.getPrimaryService(SERVIZIO_UUID);
-            })
+            .then(server => return server.getPrimaryService(SERVIZIO_UUID))
             .then(servizio => {
-                stampaLog("Servizio trovato. Configurazione canali...");
-                servizio.getCharacteristic(CARATTERISTICA_WRITE_UUID).then(cWrite => { 
-                    caratteristicaScrittura = cWrite; 
-                    stampaLog("Canale Scrittura (FF02) Mappato.");
-                });
+                servizio.getCharacteristic(CARATTERISTICA_WRITE_UUID).then(cWrite => { caratteristicaScrittura = cWrite; });
                 return servizio.getCharacteristic(CARATTERISTICA_READ_UUID);
             })
             .then(cRead => {
                 caratteristicaLettura = cRead;
-                stampaLog("Canale Lettura (FF01) Mappato. Attivazione notifiche...");
                 return caratteristicaLettura.startNotifications();
             })
             .then(() => {
+                // GESTORE DELLE RISPOSTE AUTOMATICHE (Il cuore di CHIRP)
                 caratteristicaLettura.addEventListener('characteristicvaluechanged', (event) => {
                     let valore = new Uint8Array(event.target.value.buffer);
                     let stringaHex = Array.from(valore).map(b => b.toString(16).padStart(2, '0')).join(' ').toUpperCase();
-                    let stringaAscii = Array.from(valore).map(b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : '.').join('');
-                    stampaLog(`<span style="color: #00ffcc;"><- Ricevuto HEX: ${stringaHex} | ASCII: ${stringaAscii}</span>`);
+                    stampaLog(`<span style="color: #00ffcc;"><- Radio: ${stringaHex}</span>`);
+                    
+                    // Macchina a stati per seguire CHIRP
+                    gestisciRispostaRadio(valore);
                 });
-                stampaLog("<span style='color: #00ff00; font-weight: bold;'>CONNESSO! ESEGUI I PASSI IN SEQUENZA.</span>");
+                stampaLog("<span style='color: #00ff00;'>PRONTO. Accendi la radio e premi il pulsante ROSSO.</span>");
             })
             .catch(error => { stampaLog("<span style='color: red;'>ERRORE: " + error + "</span>"); });
         }
 
-        function inviaStrettaMano() {
-            if (!caratteristicaScrittura) return;
+        async function avviaFlussoChirp() {
+            if (!caratteristicaScrittura) { return stampaLog("Errore: Non sei connesso!"); }
+            stepProtocollo = 1;
+            stampaLog("-> [CHIRP Step 1] Invio Stretta di mano (PROGRAM)...");
             const payload = new Uint8Array([0x06, 0x50, 0x52, 0x4F, 0x47, 0x52, 0x41, 0x4D]);
-            stampaLog("-> Invio: PROGRAM...");
-            caratteristicaScrittura.writeValue(payload).catch(err => stampaLog("Errore: " + err));
+            await caratteristicaScrittura.writeValue(payload);
         }
 
-        function inviaACK() {
-            if (!caratteristicaScrittura) return;
-            const payload = new Uint8Array([0x06]);
-            stampaLog("-> Invio secondo ACK: 06...");
-            caratteristicaScrittura.writeValue(payload).catch(err => stampaLog("Errore: " + err));
-        }
+        async function gestisciRispostaRadio(dati) {
+            // STEP 1: La radio risponde al PROGRAM con ACK (0x06)
+            if (stepProtocollo === 1 && dati[0] === 0x06) {
+                stampaLog("<- ACK Ricevuto. Attesa 100ms come da specifiche CHIRP...");
+                stepProtocollo = 2;
+                
+                setTimeout(async () => {
+                    stampaLog("-> [CHIRP Step 2] Invio secondo ACK (0x06)...");
+                    await caratteristicaScrittura.writeValue(new Uint8Array([0x06]));
+                }, 100);
+                return;
+            }
 
-        // TENTATIVO 4A: Il nuovo standard a blocchi grandi (64 byte)
-        function leggiStandardNuovo() {
-            if (!caratteristicaScrittura) return;
-            // 0x52 ('R') + Indirizzo (00 00) + Lunghezza (40 in HEX = 64 byte decimali)
-            const payload = new Uint8Array([0x52, 0x00, 0x00, 0x40]);
-            stampaLog("-> TENTATIVO 4A: Richiesta blocco da 64 byte...");
-            caratteristicaScrittura.writeValue(payload).catch(err => console.log(err));
-        }
-
-        // TENTATIVO 4B: Lo standard intermedio a 32 byte
-        function leggiStandardVecchio() {
-            if (!caratteristicaScrittura) return;
-            // 0x52 ('R') + Indirizzo (00 00) + Lunghezza (20 in HEX = 32 byte decimali)
-            const payload = new Uint8Array([0x52, 0x00, 0x00, 0x20]);
-            stampaLog("-> TENTATIVO 4B: Richiesta blocco da 32 byte...");
-            caratteristicaScrittura.writeValue(payload).catch(err => console.log(err));
-        }
-
-        // TENTATIVO 4C: Il comando di richiesta identificazione alternativo
-        function leggiStandardAlternativo() {
-            if (!caratteristicaScrittura) return;
-            // Alcuni firmware cinesi non vogliono 'R' all'inizio ma rispondono al byte 0x05 per sputare la versione
-            const payload = new Uint8Array([0x05]);
-            stampaLog("-> TENTATIVO 4C: Invio byte di identificazione 0x05...");
-            caratteristicaScrittura.writeValue(payload).catch(err => console.log(err));
+            // STEP 2: Dopo il secondo ACK la radio sputa il firmware (es. inizia con lettere o dati identificativi)
+            if (stepProtocollo === 2) {
+                stampaLog("<- Identificativo firmware ricevuto. Invio terzo ACK di conferma...");
+                stepProtocollo = 3;
+                
+                setTimeout(async () => {
+                    await caratteristicaScrittura.writeValue(new Uint8Array([0x06]));
+                    stampaLog("-> [CHIRP Step 3] Terzo ACK inviato. Richiesta lettura blocco memoria 0x0000 (64 byte)...");
+                    
+                    // Invio comando finale di lettura standard CHIRP Next (R + 00 + 00 + 40)
+                    setTimeout(async () => {
+                        const payloadLettura = new Uint8Array([0x52, 0x00, 0x00, 0x40]);
+                        await caratteristicaScrittura.writeValue(payloadLettura);
+                    }, 50);
+                }, 100);
+                return;
+            }
         }
     </script>
 </body>
