@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Baofeng BT-1AD Controller v2</title>
+    <title>Baofeng BT-1AD Controller v3</title>
     <style>
         body { 
             font-family: sans-serif; 
@@ -12,26 +12,32 @@
             background: #222; 
             color: #fff; 
         }
+        .btn-container {
+            display: block;
+            margin: 0 auto;
+            max-width: 400px;
+        }
         button { 
             padding: 15px 25px; 
             font-size: 16px; 
-            margin: 10px; 
+            margin: 8px 0; 
             border: none; 
             border-radius: 5px; 
             cursor: pointer; 
             font-weight: bold;
-            width: 85%;
-            max-width: 300px;
+            width: 100%;
         }
         .btn-connect { background-color: #28a745; color: white; }
         .btn-action { background-color: #007bff; color: white; }
         .btn-ack { background-color: #ffc107; color: black; }
+        .btn-read { background-color: #9400d3; color: white; }
+        
         #log { 
             background: #000; 
             color: #0f0; 
             padding: 15px; 
             text-align: left; 
-            height: 250px; 
+            height: 280px; 
             overflow-y: scroll; 
             border-radius: 5px; 
             font-family: monospace; 
@@ -45,13 +51,14 @@
 <body>
 
     <h2>Baofeng BT-1AD Web App</h2>
-    <p>Assicurati che il Bluetooth del telefono e la radio siano accesi.</p>
+    <p>Accendi la radio (volume alto) e il dongle prima di iniziare.</p>
     
-    <button class="btn-connect" onclick="connettiBluetooth()">1. Connetti Dongle</button>
-    <br>
-    <button class="btn-action" onclick="inviaStrettaMano()">2. Sveglia Radio (PROGRAM)</button>
-    <br>
-    <button class="btn-ack" onclick="inviaACK()">3. Invia Secondo ACK (06)</button>
+    <div class="btn-container">
+        <button class="btn-connect" onclick="connettiBluetooth()">1. Connetti Dongle</button>
+        <button class="btn-action" onclick="inviaStrettaMano()">2. Sveglia Radio (PROGRAM)</button>
+        <button class="btn-ack" onclick="inviaACK()">3. Invia Secondo ACK (06)</button>
+        <button class="btn-read" onclick="leggiBloccoMemoria()">4. Leggi Canale 1 (Test)</button>
+    </div>
     
     <h3>Log Comunicazione:</h3>
     <div id="log">In attesa di connessione...</div>
@@ -61,7 +68,7 @@
         let caratteristicaScrittura = null;
         let caratteristicaLettura = null;
 
-        // UUID estratti dal tuo screenshot
+        // I tuoi UUID verificati dallo screenshot
         const SERVIZIO_UUID = '0000ff00-0000-1000-8000-00805f9b34fb';
         const CARATTERISTICA_READ_UUID = '0000ff01-0000-1000-8000-00805f9b34fb';
         const CARATTERISTICA_WRITE_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';
@@ -78,7 +85,7 @@
         function connettiBluetooth() {
             stampaLog("Tentativo di apertura pop-up di ricerca...");
 
-            // Esecuzione immediata al click per bypassare le restrizioni di Chrome
+            // Esecuzione immediata al click per bypassare i blocchi di sicurezza di Chrome
             navigator.bluetooth.requestDevice({
                 filters: [{ namePrefix: 'BF_' }],
                 optionalServices: [SERVIZIO_UUID]
@@ -95,14 +102,14 @@
             .then(servizio => {
                 stampaLog("Servizio trovato. Configurazione canali...");
                 
-                // Salva la caratteristica di scrittura (FF02)
+                // Mappa il canale di scrittura (FF02)
                 servizio.getCharacteristic(CARATTERISTICA_WRITE_UUID)
                     .then(cWrite => { 
                         caratteristicaScrittura = cWrite; 
                         stampaLog("Canale Scrittura (FF02) Mappato.");
                     });
 
-                // Ritorna la caratteristica di lettura (FF01) per la catena successiva
+                // Ritorna il canale di lettura (FF01) alla catena successiva
                 return servizio.getCharacteristic(CARATTERISTICA_READ_UUID);
             })
             .then(cRead => {
@@ -111,14 +118,14 @@
                 return caratteristicaLettura.startNotifications();
             })
             .then(() => {
-                // Configura la ricezione dei dati della radio
+                // Ascolta e stampa sul log tutto ciò che la radio risponde
                 caratteristicaLettura.addEventListener('characteristicvaluechanged', (event) => {
                     let valore = new Uint8Array(event.target.value.buffer);
                     let stringaHex = Array.from(valore).map(b => b.toString(16).padStart(2, '0')).join(' ').toUpperCase();
                     let stringaAscii = Array.from(valore).map(b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : '.').join('');
                     stampaLog(`<span style="color: #00ffcc;"><- Ricevuto HEX: ${stringaHex} | ASCII: ${stringaAscii}</span>`);
                 });
-                stampaLog("<span style='color: #00ff00; font-weight: bold;'>CONNESSO CON SUCCESSO! PROCEDI AL PUNTO 2.</span>");
+                stampaLog("<span style='color: #00ff00; font-weight: bold;'>CONNESSO! ESEGUI I PASSI IN SEQUENZA.</span>");
             })
             .catch(error => {
                 stampaLog("<span style='color: red;'>ERRORE: " + error + "</span>");
@@ -127,28 +134,37 @@
 
         function inviaStrettaMano() {
             if (!caratteristicaScrittura) { 
-                stampaLog("<span style='color: red;'>Errore: Non sei connesso! Clicca prima sul punto 1.</span>"); 
+                stampaLog("<span style='color: red;'>Errore: Non connesso! Clicca prima sul punto 1.</span>"); 
                 return; 
             }
-            // Byte: \x06PROGRAM
             const payload = new Uint8Array([0x06, 0x50, 0x52, 0x4F, 0x47, 0x52, 0x41, 0x4D]);
             stampaLog("-> Invio: PROGRAM...");
             caratteristicaScrittura.writeValue(payload)
-                .then(() => stampaLog("Comando inviato, attendi risposta dalla radio nel log..."))
+                .then(() => stampaLog("Comando inviato, attendi risposta della radio..."))
                 .catch(err => stampaLog("<span style='color: red;'>Errore invio: " + err + "</span>"));
         }
 
         function inviaACK() {
-            if (!caratteristicaScrittura) {
-                stampaLog("<span style='color: red;'>Errore: Non sei connesso!</span>");
-                return;
-            }
-            // Un singolo byte 0x06
+            if (!caratteristicaScrittura) return;
             const payload = new Uint8Array([0x06]);
-            stampaLog("-> Invio secondo ACK: 06...");
+            stampaLog("-> Invio secondo ACK: 06 (silenzioso)...");
             caratteristicaScrittura.writeValue(payload)
-                .then(() => stampaLog("ACK inviato."))
+                .then(() => stampaLog("ACK inviato. La radio è pronta, premi il punto 4."))
                 .catch(err => stampaLog("<span style='color: red;'>Errore ACK: " + err + "</span>"));
+        }
+
+        function leggiBloccoMemoria() {
+            if (!caratteristicaScrittura) { 
+                stampaLog("<span style='color: red;'>Errore: Non sei connesso!</span>"); 
+                return; 
+            }
+            
+            // Protocollo Baofeng: 0x52 ('R') + Indirizzo (00 00) + Lunghezza (10 in Hex = 16 byte decimale)
+            const payload = new Uint8Array([0x52, 0x00, 0x00, 0x10]);
+            
+            stampaLog("-> Richiesta lettura indirizzo 0x0000 (Canale 1)...");
+            caratteristicaScrittura.writeValue(payload)
+                .catch(err => stampaLog("<span style='color: red;'>Errore lettura: " + err + "</span>"));
         }
     </script>
 </body>
