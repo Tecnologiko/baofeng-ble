@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Baofeng BT-1AD Custom Controller</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #222; color: #fff; }
+        button { padding: 12px 20px; font-size: 15px; margin: 8px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .btn-connect { background-color: #28a745; color: white; }
+        .btn-action { background-color: #007bff; color: white; }
+        .btn-ack { background-color: #ffc107; color: black; }
+        #log { background: #000; color: #0f0; padding: 15px; text-align: left; height: 220px; overflow-y: scroll; border-radius: 5px; font-family: monospace; font-size: 13px; margin-top: 15px; }
+        .box { border: 1px solid #444; padding: 15px; margin: 15px auto; max-width: 400px; border-radius: 8px; background: #333; }
+        input { padding: 10px; font-size: 16px; width: 80%; text-align: center; border-radius: 5px; border: 1px solid #666; background: #fff; color: #000; }
+    </style>
+</head>
+<body>
+
+    <h2>Baofeng BT-1AD Web App</h2>
+    
+    <button class="btn-connect" onclick="connettiBluetooth()">1. Connetti Dongle</button>
+    <br>
+    <button class="btn-action" onclick="inviaStrettaMano()">2. Sveglia Radio (PROGRAM)</button>
+    <button class="btn-ack" onclick="inviaACK()">3. Invia Secondo ACK (06)</button>
+    
+    <div class="box">
+        <h3>Esempio Canale Memoria</h3>
+        <p>Inserisci Frequenza (Esempio: 145.500):</p>
+        <input type="text" id="frequenza" value="145.500" placeholder="000.000">
+        <br><br>
+        <button class="btn-action" onclick="calcolaEInviaBCD()" style="background-color: #dc3545;">Invia a Radio (Test)</button>
+    </div>
+
+    <h3>Log Comunicazione:</h3>
+    <div id="log"></div>
+
+    <script>
+        let dispositivoBle = null;
+        let caratteristicaScrittura = null;
+        let caratteristicaLettura = null;
+
+        // I TUOI UUID ESATTI DALLO SCREENSHOT
+        const SERVIZIO_UUID = '0000ff00-0000-1000-8000-00805f9b34fb';
+        const CARATTERISTICA_READ_UUID = '0000ff01-0000-1000-8000-00805f9b34fb';
+        const CARATTERISTICA_WRITE_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';
+
+        function stampaLog(testo) {
+            const logDiv = document.getElementById('log');
+            logDiv.innerHTML += testo + '<br>';
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function connettiBluetooth() {
+            try {
+                stampaLog("Ricerca dei dispositivi 'BF_' in corso...");
+                dispositivoBle = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: 'BF_' }],
+                    optionalServices: [SERVIZIO_UUID]
+                });
+
+                stampaLog(`Connessione a ${dispositivoBle.name}...`);
+                const server = await dispositivoBle.gatt.connect();
+                
+                stampaLog("Apertura Servizio FF00...");
+                const servizio = await server.getPrimaryService(SERVIZIO_UUID);
+                
+                stampaLog("Mappatura Canale Scrittura FF02...");
+                caratteristicaScrittura = await servizio.getCharacteristic(CARATTERISTICA_WRITE_UUID);
+                
+                stampaLog("Mappatura Canale Lettura FF01...");
+                caratteristicaLettura = await servizio.getCharacteristic(CARATTERISTICA_READ_UUID);
+                
+                // Attiviamo l'ascolto sul canale di notifica FF01
+                await caratteristicaLettura.startNotifications();
+                caratteristicaLettura.addEventListener('characteristicvaluechanged', (event) => {
+                    let valore = new Uint8Array(event.target.value.buffer);
+                    let stringaHex = Array.from(valore).map(b => b.toString(16).padStart(2, '0')).join(' ').toUpperCase();
+                    let stringaAscii = Array.from(valore).map(b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : '.').join('');
+                    stampaLog(`<span style="color: #00ffcc;"><- Ricevuto HEX: ${stringaHex} | ASCII: ${stringaAscii}</span>`);
+                });
+
+                stampaLog("CONNESSO E PRONTO!");
+            } catch (error) {
+                stampaLog("<span style="color: red;">ERRORE: " + error + "</span>");
+            }
+        }
+
+        async function inviaStrettaMano() {
+            if (!caratteristicaScrittura) { return stampaLog("Errore: Prima connettiti!"); }
+            try {
+                // 06 50 52 4F 47 52 41 4D
+                const payload = new Uint8Array([0x06, 0x50, 0x52, 0x4F, 0x47, 0x52, 0x41, 0x4D]);
+                stampaLog("-> Invio: PROGRAM");
+                await caratteristicaScrittura.writeValue(payload);
+            } catch (error) {
+                stampaLog("Errore scrittura: " + error);
+            }
+        }
+
+        async function inviaACK() {
+            if (!caratteristicaScrittura) { return; }
+            try {
+                const payload = new Uint8Array([0x06]);
+                stampaLog("-> Invio secondo ACK: 06");
+                await caratteristicaScrittura.writeValue(payload);
+            } catch (error) {
+                stampaLog("Errore ACK: " + error);
+            }
+        }
+
+        // Questo serve a farti capire come funziona la conversione per la radio
+        async function calcolaEInviaBCD() {
+            let freqStr = document.getElementById('frequenza').value.replace('.', ''); // Toglie il punto (es: 145500)
+            if(freqStr.length < 6) { 
+                stampaLog("Frequenza non valida. Usa il formato 145.500");
+                return; 
+            }
+            
+            // La radio Baofeng memorizza le frequenze invertite in BCD (2 cifre per byte)
+            // Es: 14 55 00 -> diventerà memorizzato al contrario in base alla mappa di CHIRP.
+            stampaLog(`Logica BCD per frequenza ${freqStr}: [Funzione di scrittura in sviluppo]`);
+            
+            // Qui dentro in futuro metteremo il comando di scrittura memoria (0x57) 
+            // che scriverà la frequenza nell'indirizzo del Canale 1
+        }
+    </script>
+</body>
+</html>
