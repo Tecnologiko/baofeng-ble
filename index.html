@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Baofeng BT-1AD Controller v3</title>
+    <title>Baofeng BT-1AD Controller v4</title>
     <style>
         body { 
             font-family: sans-serif; 
@@ -51,13 +51,16 @@
 <body>
 
     <h2>Baofeng BT-1AD Web App</h2>
-    <p>Accendi la radio (volume alto) e il dongle prima di iniziare.</p>
+    <p>Esegui 1, 2, 3 e poi testa i tre pulsanti viola uno alla volta.</p>
     
     <div class="btn-container">
         <button class="btn-connect" onclick="connettiBluetooth()">1. Connetti Dongle</button>
         <button class="btn-action" onclick="inviaStrettaMano()">2. Sveglia Radio (PROGRAM)</button>
         <button class="btn-ack" onclick="inviaACK()">3. Invia Secondo ACK (06)</button>
-        <button class="btn-read" onclick="leggiBloccoMemoria()">4. Leggi Canale 1 (Test)</button>
+        <hr style="border: 1px solid #444; margin: 15px 0;">
+        <button class="btn-read" onclick="leggiStandardNuovo()">4A. Leggi Blocco 64 byte (UV-5R Recenti)</button>
+        <button class="btn-read" onclick="leggiStandardVecchio()">4B. Leggi Blocco 32 byte (UV-5R Medie)</button>
+        <button class="btn-read" onclick="leggiStandardAlternativo()">4C. Leggi con Comando '0x05'</button>
     </div>
     
     <h3>Log Comunicazione:</h3>
@@ -65,27 +68,23 @@
 
     <script>
         let dispositivoBle = null;
+        let caratteristicheMappate = false;
         let caratteristicaScrittura = null;
         let caratteristicaLettura = null;
 
-        // I tuoi UUID verificati dallo screenshot
         const SERVIZIO_UUID = '0000ff00-0000-1000-8000-00805f9b34fb';
         const CARATTERISTICA_READ_UUID = '0000ff01-0000-1000-8000-00805f9b34fb';
         const CARATTERISTICA_WRITE_UUID = '0000ff02-0000-1000-8000-00805f9b34fb';
 
         function stampaLog(testo) {
             const logDiv = document.getElementById('log');
-            if (logDiv.innerHTML === "In attesa di connessione...") {
-                logDiv.innerHTML = "";
-            }
+            if (logDiv.innerHTML === "In attesa di connessione...") { logDiv.innerHTML = ""; }
             logDiv.innerHTML += testo + '<br>';
             logDiv.scrollTop = logDiv.scrollHeight;
         }
 
         function connettiBluetooth() {
             stampaLog("Tentativo di apertura pop-up di ricerca...");
-
-            // Esecuzione immediata al click per bypassare i blocchi di sicurezza di Chrome
             navigator.bluetooth.requestDevice({
                 filters: [{ namePrefix: 'BF_' }],
                 optionalServices: [SERVIZIO_UUID]
@@ -101,15 +100,10 @@
             })
             .then(servizio => {
                 stampaLog("Servizio trovato. Configurazione canali...");
-                
-                // Mappa il canale di scrittura (FF02)
-                servizio.getCharacteristic(CARATTERISTICA_WRITE_UUID)
-                    .then(cWrite => { 
-                        caratteristicaScrittura = cWrite; 
-                        stampaLog("Canale Scrittura (FF02) Mappato.");
-                    });
-
-                // Ritorna il canale di lettura (FF01) alla catena successiva
+                servizio.getCharacteristic(CARATTERISTICA_WRITE_UUID).then(cWrite => { 
+                    caratteristicaScrittura = cWrite; 
+                    stampaLog("Canale Scrittura (FF02) Mappato.");
+                });
                 return servizio.getCharacteristic(CARATTERISTICA_READ_UUID);
             })
             .then(cRead => {
@@ -118,7 +112,6 @@
                 return caratteristicaLettura.startNotifications();
             })
             .then(() => {
-                // Ascolta e stampa sul log tutto ciò che la radio risponde
                 caratteristicaLettura.addEventListener('characteristicvaluechanged', (event) => {
                     let valore = new Uint8Array(event.target.value.buffer);
                     let stringaHex = Array.from(valore).map(b => b.toString(16).padStart(2, '0')).join(' ').toUpperCase();
@@ -127,44 +120,48 @@
                 });
                 stampaLog("<span style='color: #00ff00; font-weight: bold;'>CONNESSO! ESEGUI I PASSI IN SEQUENZA.</span>");
             })
-            .catch(error => {
-                stampaLog("<span style='color: red;'>ERRORE: " + error + "</span>");
-            });
+            .catch(error => { stampaLog("<span style='color: red;'>ERRORE: " + error + "</span>"); });
         }
 
         function inviaStrettaMano() {
-            if (!caratteristicaScrittura) { 
-                stampaLog("<span style='color: red;'>Errore: Non connesso! Clicca prima sul punto 1.</span>"); 
-                return; 
-            }
+            if (!caratteristicaScrittura) return;
             const payload = new Uint8Array([0x06, 0x50, 0x52, 0x4F, 0x47, 0x52, 0x41, 0x4D]);
             stampaLog("-> Invio: PROGRAM...");
-            caratteristicaScrittura.writeValue(payload)
-                .then(() => stampaLog("Comando inviato, attendi risposta della radio..."))
-                .catch(err => stampaLog("<span style='color: red;'>Errore invio: " + err + "</span>"));
+            caratteristicaScrittura.writeValue(payload).catch(err => stampaLog("Errore: " + err));
         }
 
         function inviaACK() {
             if (!caratteristicaScrittura) return;
             const payload = new Uint8Array([0x06]);
-            stampaLog("-> Invio secondo ACK: 06 (silenzioso)...");
-            caratteristicaScrittura.writeValue(payload)
-                .then(() => stampaLog("ACK inviato. La radio è pronta, premi il punto 4."))
-                .catch(err => stampaLog("<span style='color: red;'>Errore ACK: " + err + "</span>"));
+            stampaLog("-> Invio secondo ACK: 06...");
+            caratteristicaScrittura.writeValue(payload).catch(err => stampaLog("Errore: " + err));
         }
 
-        function leggiBloccoMemoria() {
-            if (!caratteristicaScrittura) { 
-                stampaLog("<span style='color: red;'>Errore: Non sei connesso!</span>"); 
-                return; 
-            }
-            
-            // Protocollo Baofeng: 0x52 ('R') + Indirizzo (00 00) + Lunghezza (10 in Hex = 16 byte decimale)
-            const payload = new Uint8Array([0x52, 0x00, 0x00, 0x10]);
-            
-            stampaLog("-> Richiesta lettura indirizzo 0x0000 (Canale 1)...");
-            caratteristicaScrittura.writeValue(payload)
-                .catch(err => stampaLog("<span style='color: red;'>Errore lettura: " + err + "</span>"));
+        // TENTATIVO 4A: Il nuovo standard a blocchi grandi (64 byte)
+        function leggiStandardNuovo() {
+            if (!caratteristicaScrittura) return;
+            // 0x52 ('R') + Indirizzo (00 00) + Lunghezza (40 in HEX = 64 byte decimali)
+            const payload = new Uint8Array([0x52, 0x00, 0x00, 0x40]);
+            stampaLog("-> TENTATIVO 4A: Richiesta blocco da 64 byte...");
+            caratteristicaScrittura.writeValue(payload).catch(err => console.log(err));
+        }
+
+        // TENTATIVO 4B: Lo standard intermedio a 32 byte
+        function leggiStandardVecchio() {
+            if (!caratteristicaScrittura) return;
+            // 0x52 ('R') + Indirizzo (00 00) + Lunghezza (20 in HEX = 32 byte decimali)
+            const payload = new Uint8Array([0x52, 0x00, 0x00, 0x20]);
+            stampaLog("-> TENTATIVO 4B: Richiesta blocco da 32 byte...");
+            caratteristicaScrittura.writeValue(payload).catch(err => console.log(err));
+        }
+
+        // TENTATIVO 4C: Il comando di richiesta identificazione alternativo
+        function leggiStandardAlternativo() {
+            if (!caratteristicaScrittura) return;
+            // Alcuni firmware cinesi non vogliono 'R' all'inizio ma rispondono al byte 0x05 per sputare la versione
+            const payload = new Uint8Array([0x05]);
+            stampaLog("-> TENTATIVO 4C: Invio byte di identificazione 0x05...");
+            caratteristicaScrittura.writeValue(payload).catch(err => console.log(err));
         }
     </script>
 </body>
